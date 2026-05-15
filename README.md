@@ -110,34 +110,30 @@ pip install pymupdf
 ```python
 import fitz
 import time
+import os
 from locvec import LocalVec
 
-def extract_and_chunk_pdf(file_path, chunk_size=1000):
+def extract_and_chunk_pdf(file_path, chunk_size=300):
     text = ""
     with fitz.open(file_path) as doc:
         for page in doc:
             text += page.get_text()
     
-    # Simple sliding window chunking
     return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
-# 1. Setup Engine
 engine = LocalVec()
 
-# 2. Ingest PDF
 pdf_path = "research_paper.pdf"
 chunks = extract_and_chunk_pdf(pdf_path)
 
 print(f"Extracted {len(chunks)} shards from {pdf_path}")
 engine.build_full_index(chunks)
 
-# 3. Search for Context
 query = "Summarize the key findings of this document."
 start_time = time.perf_counter()
 
 idx, context = engine.search(query)
 
-# Check if search returned a valid index (positive number)
 if idx < 0:
     print(f"Error: {context}")
     exit()
@@ -145,11 +141,9 @@ if idx < 0:
 latency_ms = (time.perf_counter() - start_time) * 1000
 print(f"Search completed in {latency_ms:.2f}ms")
 
-# 4. Memory Handoff & Inference
 engine.offload_encoder()
 
 print("\nAI Response:")
-# Use positional arguments to match your LocalVec.query_llm_stream signature
 for token in engine.query_llm_stream("phi3", query, context):
     print(token, end="", flush=True)
 print("\n")
