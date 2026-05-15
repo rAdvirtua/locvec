@@ -35,7 +35,7 @@ Verify your CUDA installation:
 nvcc --version
 ```
 
-If the command is not recognized, add the CUDA `bin` directory to your system `PATH`.
+> If the command is not recognized, add the CUDA `bin` directory to your system `PATH`.
 
 ---
 
@@ -118,7 +118,7 @@ def extract_and_chunk_pdf(file_path, chunk_size=300):
     with fitz.open(file_path) as doc:
         for page in doc:
             text += page.get_text()
-    
+
     return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
 engine = LocalVec()
