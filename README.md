@@ -249,7 +249,7 @@ import urllib.request
 from locvec import LocalVec
 
 SOURCE_PDF = "research_paper.pdf"
-QUERY = "Compare access latency and hardware characteristics of Constant vs Texture Memory in CUDA."
+QUERY = "What is the specific methodology used in this paper?"
 TARGET_SHARDS = 200000
 OLLAMA_MODEL = "phi3"
 
