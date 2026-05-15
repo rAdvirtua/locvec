@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <cuda_runtime.h>
 
 #define TILE_SIZE 32
@@ -57,8 +58,11 @@ __global__ void average_and_check_kernel(float* __restrict__ new_centroids, floa
     }
 }
 
-extern "C" int train_index_kernel(int k_clusters, int dims) {
-    FILE* f = fopen("offline_embeddings.bin", "rb");
+extern "C" int train_index_kernel(int k_clusters, int dims, const char* db_prefix, int max_iter) {
+    char filename[512];
+    sprintf(filename, "%s_offline_embeddings.bin", db_prefix);
+    
+    FILE* f = fopen(filename, "rb");
     if (!f) return 1;
     fseek(f, 0, SEEK_END);
     long file_size = ftell(f);
@@ -102,7 +106,7 @@ extern "C" int train_index_kernel(int k_clusters, int dims) {
     int blocks_K = (k_clusters + threads - 1) / threads;
 
     int iter = 0;
-    while (iter < 100) {
+    while (iter < max_iter) {
         int h_converged = 1;
         cudaMemcpy(d_converged, &h_converged, sizeof(int), cudaMemcpyHostToDevice);
 
@@ -121,13 +125,15 @@ extern "C" int train_index_kernel(int k_clusters, int dims) {
     }
 
     cudaMemcpy(h_centroids, d_centroids, centroid_bytes, cudaMemcpyDeviceToHost);
-    FILE* out_c = fopen("ivf_centroids.bin", "wb");
+    sprintf(filename, "%s_ivf_centroids.bin", db_prefix);
+    FILE* out_c = fopen(filename, "wb");
     fwrite(h_centroids, sizeof(float), (size_t)k_clusters * dims, out_c);
     fclose(out_c);
 
     int* h_labels = (int*)malloc(label_bytes);
     cudaMemcpy(h_labels, d_labels, label_bytes, cudaMemcpyDeviceToHost);
-    FILE* out_l = fopen("ivf_labels.bin", "wb");
+    sprintf(filename, "%s_ivf_labels.bin", db_prefix);
+    FILE* out_l = fopen(filename, "wb");
     fwrite(h_labels, sizeof(int), n_vectors, out_l);
     fclose(out_l);
 

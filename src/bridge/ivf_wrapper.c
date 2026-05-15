@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct {
     int start_offset;
@@ -12,15 +13,18 @@ int global_k = 0;
 int total_vectors_indexed = 0;
 
 extern int run_cluster_search(float* cluster_data, float* query, int count, int dims);
-extern int train_index_kernel(int k, int dims);
-extern int build_ivf_structure(int k, int dims);
+extern int train_index_kernel(int k, int dims, const char* db_prefix, int max_iter);
+extern int build_ivf_structure(int k, int dims, const char* db_prefix);
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-int init_engine(int dims) {
-    FILE* fc = fopen("ivf_centroids.bin", "rb");
+int init_engine(int dims, const char* db_prefix) {
+    char filename[512];
+    
+    sprintf(filename, "%s_ivf_centroids.bin", db_prefix);
+    FILE* fc = fopen(filename, "rb");
     if (!fc) return -1;
     fseek(fc, 0, SEEK_END);
     global_k = ftell(fc) / (dims * sizeof(float));
@@ -31,7 +35,9 @@ int init_engine(int dims) {
     fclose(fc);
 
     global_offsets = (ClusterOffset*)malloc(global_k * sizeof(ClusterOffset));
-    FILE* fo = fopen("ivf_offsets.bin", "rb");
+    
+    sprintf(filename, "%s_ivf_offsets.bin", db_prefix);
+    FILE* fo = fopen(filename, "rb");
     if (!fo) {
         free(global_centroids);
         global_centroids = NULL;
@@ -52,15 +58,15 @@ void cleanup_engine() {
     if (global_offsets) { free(global_offsets); global_offsets = NULL; }
 }
 
-int train_index(int k, int dims) {
-    return train_index_kernel(k, dims);
+int train_index(int k, int dims, const char* db_prefix, int max_iter) {
+    return train_index_kernel(k, dims, db_prefix, max_iter);
 }
 
-int build_index(int k, int dims) {
-    return build_ivf_structure(k, dims);
+int build_index(int k, int dims, const char* db_prefix) {
+    return build_ivf_structure(k, dims, db_prefix);
 }
 
-int vector_search(float* query, int dims) {
+int vector_search(float* query, int dims, const char* db_prefix) {
     if (!global_centroids || !global_offsets) return -404;
 
     float min_dist = 1e30f;
@@ -84,7 +90,11 @@ int vector_search(float* query, int dims) {
     int target_count = global_offsets[best_cluster].count;
 
     float* cluster_data = (float*)malloc(target_count * dims * sizeof(float));
-    FILE* fd = fopen("ivf_database.bin", "rb");
+    
+    char filename[512];
+    sprintf(filename, "%s_ivf_database.bin", db_prefix);
+    FILE* fd = fopen(filename, "rb");
+    
     if (!fd) { free(cluster_data); return -2; }
     
     fseek(fd, (size_t)target_offset * dims * sizeof(float), SEEK_SET);

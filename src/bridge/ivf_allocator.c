@@ -1,13 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct {
     int start_offset;
     int count;
 } ClusterOffset;
 
-int build_ivf_structure(int k_clusters, int dims) {
-    FILE* f_data = fopen("offline_embeddings.bin", "rb");
+int build_ivf_structure(int k_clusters, int dims, const char* db_prefix) {
+    char filename[512];
+    
+    sprintf(filename, "%s_offline_embeddings.bin", db_prefix);
+    FILE* f_data = fopen(filename, "rb");
     if (!f_data) return 1;
 
     fseek(f_data, 0, SEEK_END);
@@ -24,7 +28,8 @@ int build_ivf_structure(int k_clusters, int dims) {
 
     if (!raw_data || !labels || !organized_data || !write_pointers || !offsets) return 1;
 
-    FILE* f_labels = fopen("ivf_labels.bin", "rb");
+    sprintf(filename, "%s_ivf_labels.bin", db_prefix);
+    FILE* f_labels = fopen(filename, "rb");
     fread(raw_data, sizeof(float), (size_t)n_vectors * dims, f_data);
     fread(labels, sizeof(int), n_vectors, f_labels);
     fclose(f_data);
@@ -52,8 +57,11 @@ int build_ivf_structure(int k_clusters, int dims) {
         write_pointers[cluster]++;
     }
 
-    FILE* f_out_data = fopen("ivf_database.bin", "wb");
-    FILE* f_out_offsets = fopen("ivf_offsets.bin", "wb");
+    sprintf(filename, "%s_ivf_database.bin", db_prefix);
+    FILE* f_out_data = fopen(filename, "wb");
+    
+    sprintf(filename, "%s_ivf_offsets.bin", db_prefix);
+    FILE* f_out_offsets = fopen(filename, "wb");
     
     fwrite(organized_data, sizeof(float), (size_t)n_vectors * dims, f_out_data);
     fwrite(offsets, sizeof(ClusterOffset), k_clusters, f_out_offsets);
