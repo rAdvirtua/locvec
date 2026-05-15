@@ -23,7 +23,10 @@ class LocalVec:
         self.lib.cleanup_engine.restype = None
         self.lib.vector_search.argtypes = [np.ctypeslib.ndpointer(dtype=np.float32, ndim=1), ctypes.c_int]
         self.lib.vector_search.restype = ctypes.c_int
+        
+        self.lib.train_index.argtypes = [ctypes.c_int]
         self.lib.train_index.restype = ctypes.c_int
+        self.lib.build_index.argtypes = [ctypes.c_int]
         self.lib.build_index.restype = ctypes.c_int
 
         self.lib.init_engine()
@@ -39,6 +42,9 @@ class LocalVec:
                 self.db = json.load(f)
 
     def build_full_index(self, texts):
+        n = len(texts)
+        k = max(1, int(np.sqrt(n)))
+
         embeddings = self.encoder.encode(texts, show_progress_bar=True).astype(np.float32)
         embeddings.tofile("offline_embeddings.bin")
 
@@ -46,8 +52,8 @@ class LocalVec:
         with open(self.map_path, "w") as f:
             json.dump(self.db, f)
 
-        if self.lib.train_index() != 0: return False
-        if self.lib.build_index() != 0: return False
+        if self.lib.train_index(k) != 0: return False
+        if self.lib.build_index(k) != 0: return False
         
         self.lib.cleanup_engine()
         self.lib.init_engine()

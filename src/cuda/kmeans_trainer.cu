@@ -3,39 +3,26 @@
 #include <cuda_runtime.h>
 
 #define DIMS 384
-#define K_CLUSTERS 1024
 #define TILE_SIZE 32
 
-__global__ void optimized_assign_kernel(const float* __restrict__ data_soa, const float* __restrict__ centroids, int* __restrict__ labels, int n_vectors) {
+__global__ void optimized_assign_kernel(const float* __restrict__ data_soa, const float* __restrict__ centroids, int* __restrict__ labels, int n_vectors, int k_clusters) {
     int vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    __shared__ float s_centroids[TILE_SIZE][DIMS];
-
     if (vec_idx >= n_vectors) return;
 
     float min_dist = 1e30f;
     int best_cluster = 0;
 
-    for (int t = 0; t < K_CLUSTERS; t += TILE_SIZE) {
-        if (threadIdx.x < TILE_SIZE) {
-            for (int d = 0; d < DIMS; ++d) {
-                s_centroids[threadIdx.x][d] = centroids[(t + threadIdx.x) * DIMS + d];
-            }
+    for (int k = 0; k < k_clusters; ++k) {
+        float dist = 0.0f;
+        for (int d = 0; d < DIMS; ++d) {
+            float val = data_soa[d * n_vectors + vec_idx];
+            float diff = val - centroids[k * DIMS + d];
+            dist += diff * diff;
         }
-        __syncthreads();
-
-        for (int k = 0; k < TILE_SIZE; ++k) {
-            float dist = 0.0f;
-            for (int d = 0; d < DIMS; ++d) {
-                float val = data_soa[d * n_vectors + vec_idx];
-                float diff = val - s_centroids[k][d];
-                dist += diff * diff;
-            }
-            if (dist < min_dist) {
-                min_dist = dist;
-                best_cluster = t + k;
-            }
+        if (dist < min_dist) {
+            min_dist = dist;
+            best_cluster = k;
         }
-        __syncthreads();
     }
     labels[vec_idx] = best_cluster;
 }
@@ -51,9 +38,9 @@ __global__ void sum_centroids_kernel_soa(const float* __restrict__ data_soa, con
     }
 }
 
-__global__ void average_and_check_kernel(float* __restrict__ new_centroids, float* __restrict__ old_centroids, const int* __restrict__ counts, int* __restrict__ d_converged) {
+__global__ void average_and_check_kernel(float* __restrict__ new_centroids, float* __restrict__ old_centroids, const int* __restrict__ counts, int* __restrict__ d_converged, int k_clusters) {
     int k = blockIdx.x * blockDim.x + threadIdx.x;
-    if (k < K_CLUSTERS) {
+    if (k < k_clusters) {
         int count = counts[k];
         float max_shift = 0.0f;
         if (count > 0) {
@@ -71,7 +58,7 @@ __global__ void average_and_check_kernel(float* __restrict__ new_centroids, floa
     }
 }
 
-extern "C" int train_index_kernel() {
+extern "C" int train_index_kernel(int k_clusters) {
     FILE* f = fopen("offline_embeddings.bin", "rb");
     if (!f) return 1;
     fseek(f, 0, SEEK_END);
@@ -80,14 +67,13 @@ extern "C" int train_index_kernel() {
 
     int n_vectors = file_size / (DIMS * sizeof(float));
     size_t data_bytes = (size_t)n_vectors * DIMS * sizeof(float);
-    size_t centroid_bytes = K_CLUSTERS * DIMS * sizeof(float);
+    size_t centroid_bytes = (size_t)k_clusters * DIMS * sizeof(float);
     size_t label_bytes = (size_t)n_vectors * sizeof(int);
-    size_t count_bytes = K_CLUSTERS * sizeof(int);
+    size_t count_bytes = (size_t)k_clusters * sizeof(int);
 
     float* h_data_aos = (float*)malloc(data_bytes);
     float* h_data_soa = (float*)malloc(data_bytes);
     float* h_centroids = (float*)malloc(centroid_bytes);
-    if (!h_data_aos || !h_data_soa || !h_centroids) return 1;
 
     fread(h_data_aos, sizeof(float), (size_t)n_vectors * DIMS, f);
     fclose(f);
@@ -114,19 +100,19 @@ extern "C" int train_index_kernel() {
 
     int threads = 256;
     int blocks_N = (n_vectors + threads - 1) / threads;
-    int blocks_K = (K_CLUSTERS + threads - 1) / threads;
+    int blocks_K = (k_clusters + threads - 1) / threads;
 
     int iter = 0;
     while (iter < 100) {
         int h_converged = 1;
         cudaMemcpy(d_converged, &h_converged, sizeof(int), cudaMemcpyHostToDevice);
 
-        optimized_assign_kernel<<<blocks_N, threads>>>(d_data_soa, d_centroids, d_labels, n_vectors);
+        optimized_assign_kernel<<<blocks_N, threads>>>(d_data_soa, d_centroids, d_labels, n_vectors, k_clusters);
         cudaMemset(d_new_centroids, 0, centroid_bytes);
         cudaMemset(d_counts, 0, count_bytes);
         
         sum_centroids_kernel_soa<<<blocks_N, threads>>>(d_data_soa, d_labels, d_new_centroids, d_counts, n_vectors);
-        average_and_check_kernel<<<blocks_K, threads>>>(d_new_centroids, d_centroids, d_counts, d_converged);
+        average_and_check_kernel<<<blocks_K, threads>>>(d_new_centroids, d_centroids, d_counts, d_converged, k_clusters);
         
         cudaMemcpy(d_centroids, d_new_centroids, centroid_bytes, cudaMemcpyDeviceToDevice);
         cudaMemcpy(&h_converged, d_converged, sizeof(int), cudaMemcpyDeviceToHost);
@@ -137,7 +123,7 @@ extern "C" int train_index_kernel() {
 
     cudaMemcpy(h_centroids, d_centroids, centroid_bytes, cudaMemcpyDeviceToHost);
     FILE* out_c = fopen("ivf_centroids.bin", "wb");
-    fwrite(h_centroids, sizeof(float), K_CLUSTERS * DIMS, out_c);
+    fwrite(h_centroids, sizeof(float), (size_t)k_clusters * DIMS, out_c);
     fclose(out_c);
 
     int* h_labels = (int*)malloc(label_bytes);
