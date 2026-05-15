@@ -121,7 +121,8 @@ def extract_and_chunk_pdf(file_path, chunk_size=300):
 
     return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
-engine = LocalVec()
+# Explicitly initialize the engine with the preferred model
+engine = LocalVec(model_name='all-MiniLM-L6-v2')
 
 pdf_path = "research_paper.pdf"
 chunks = extract_and_chunk_pdf(pdf_path)
@@ -151,51 +152,53 @@ print("\n")
 
 ---
 
-## API Reference
+## User API Reference
 
-The core functionality of the library is accessed through the `LocalVec` class in `src/locvec/localvec.py`.
+To use the vector engine in your own scripts, import the main class:
 
-### `LocalVec(map_path="dataset_map.json", model_name='all-MiniLM-L6-v2')`
+```python
+from locvec import LocalVec
+```
 
-Initializes the vector retrieval engine, binds the compiled C/CUDA shared libraries via ctypes, and loads the sentence-transformer embedding model into GPU memory.
+### `LocalVec(model_name='all-MiniLM-L6-v2')`
 
-- `map_path` *(str)*: Path to save/load the JSON file that maps index IDs to their original text chunks.
-- `model_name` *(str)*: The HuggingFace sentence-transformers model used for generating embeddings.
+Initializes the vector engine and loads the embedding model into memory.
 
----
-
-### `build_full_index(texts)`
-
-Takes a list of text shards, generates their embeddings, automatically calculates the optimal number of clusters ($K = \sqrt{N}$), and triggers the CUDA kernels to train the IVF index dynamically.
-
-- `texts` *(list of str)*: A list containing the raw string chunks to be indexed.
-- **Returns** *(bool)*: `True` if index training and memory allocation succeeded, `False` otherwise.
+- `model_name` *(str, optional)*: Specify a different SentenceTransformers model from HuggingFace. Defaults to a fast, lightweight 384-dimension model (`'all-MiniLM-L6-v2'`).
 
 ---
 
-### `search(query_text)`
+### `engine.build_full_index(texts)`
 
-Encodes the string query and performs an optimized vector similarity search across the clustered IVF index using the CUDA backend.
+Ingests a list of text shards and builds the optimized vector index on your GPU. It automatically calculates the best cluster distribution for your dataset size.
 
-- `query_text` *(str)*: The prompt or question to search for.
-- **Returns** *(tuple)*: A tuple containing `(idx, context)` where `idx` is the integer ID of the best-matching chunk, and `context` is the actual text string of that chunk. If an error occurs, `idx` will return a negative error code (e.g., `-1` for no cluster found).
-
----
-
-### `offload_encoder()`
-
-Executes the dynamic VRAM handoff. It moves the embedding model from the GPU to the CPU, empties the CUDA cache, and forces Python garbage collection. Must be called after `search` and before LLM generation to prevent memory collisions.
+- `texts` *(list of str)*: A list of strings (e.g., your chunked PDF pages or text documents).
 
 ---
 
-### `query_llm_stream(model, query, context)`
+### `engine.search(query_text)`
 
-A generator function that wraps the retrieved context and original query into a prompt template, sending it to the local Ollama REST API. It yields the LLM's response token-by-token for streaming interfaces.
+Performs a high-speed, hardware-accelerated vector search against your indexed documents to find the most relevant context.
 
-- `model` *(str)*: The name of the local Ollama model to invoke (e.g., `"phi3"`).
+- `query_text` *(str)*: The question or prompt you want to search for.
+- **Returns** *(tuple)*: `(idx, context)` — The integer ID of the best-matching chunk and the actual text string of that chunk.
+
+---
+
+### `engine.offload_encoder()`
+
+Flushes the embedding model from your GPU's VRAM. Always call this before passing the retrieved context to a Local LLM. This guarantees your VRAM is completely free for generation, preventing out-of-memory crashes on consumer cards (4GB/6GB).
+
+---
+
+### `engine.query_llm_stream(model, query, context)`
+
+Sends the user's query alongside the retrieved context to your local Ollama instance, returning a stream of the response.
+
+- `model` *(str)*: The name of the Ollama model to use (e.g., `"phi3"` or `"llama3"`).
 - `query` *(str)*: The user's original question.
-- `context` *(str)*: The text payload retrieved by the `search()` function.
-- **Returns** *(generator)*: Yields individual string tokens.
+- `context` *(str)*: The text payload returned by the `engine.search()` method.
+- **Returns** *(generator)*: Yields individual string tokens for real-time console or UI streaming.
 
 ---
 
