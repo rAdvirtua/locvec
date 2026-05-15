@@ -1,14 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define DIMS 384
-
 typedef struct {
     int start_offset;
     int count;
 } ClusterOffset;
 
-int build_ivf_structure(int k_clusters) {
+int build_ivf_structure(int k_clusters, int dims) {
     FILE* f_data = fopen("offline_embeddings.bin", "rb");
     if (!f_data) return 1;
 
@@ -16,18 +14,18 @@ int build_ivf_structure(int k_clusters) {
     long file_size = ftell(f_data);
     rewind(f_data);
 
-    int n_vectors = file_size / (DIMS * sizeof(float));
+    int n_vectors = file_size / (dims * sizeof(float));
 
-    float* raw_data = (float*)malloc((size_t)n_vectors * DIMS * sizeof(float));
+    float* raw_data = (float*)malloc((size_t)n_vectors * dims * sizeof(float));
     int* labels = (int*)malloc((size_t)n_vectors * sizeof(int));
-    float* organized_data = (float*)malloc((size_t)n_vectors * DIMS * sizeof(float));
+    float* organized_data = (float*)malloc((size_t)n_vectors * dims * sizeof(float));
     int* write_pointers = (int*)malloc((size_t)k_clusters * sizeof(int));
     ClusterOffset* offsets = (ClusterOffset*)calloc(k_clusters, sizeof(ClusterOffset));
 
     if (!raw_data || !labels || !organized_data || !write_pointers || !offsets) return 1;
 
     FILE* f_labels = fopen("ivf_labels.bin", "rb");
-    fread(raw_data, sizeof(float), (size_t)n_vectors * DIMS, f_data);
+    fread(raw_data, sizeof(float), (size_t)n_vectors * dims, f_data);
     fread(labels, sizeof(int), n_vectors, f_labels);
     fclose(f_data);
     fclose(f_labels);
@@ -48,8 +46,8 @@ int build_ivf_structure(int k_clusters) {
     for (int i = 0; i < n_vectors; ++i) {
         int cluster = labels[i];
         int write_idx = write_pointers[cluster];
-        for (int d = 0; d < DIMS; ++d) {
-            organized_data[write_idx * DIMS + d] = raw_data[i * DIMS + d];
+        for (int d = 0; d < dims; ++d) {
+            organized_data[write_idx * dims + d] = raw_data[i * dims + d];
         }
         write_pointers[cluster]++;
     }
@@ -57,7 +55,7 @@ int build_ivf_structure(int k_clusters) {
     FILE* f_out_data = fopen("ivf_database.bin", "wb");
     FILE* f_out_offsets = fopen("ivf_offsets.bin", "wb");
     
-    fwrite(organized_data, sizeof(float), (size_t)n_vectors * DIMS, f_out_data);
+    fwrite(organized_data, sizeof(float), (size_t)n_vectors * dims, f_out_data);
     fwrite(offsets, sizeof(ClusterOffset), k_clusters, f_out_offsets);
     
     fclose(f_out_data);

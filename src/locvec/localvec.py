@@ -19,19 +19,27 @@ class LocalVec:
 
         self.lib = ctypes.CDLL(self.lib_path)
 
+        self.lib.init_engine.argtypes = [ctypes.c_int]
         self.lib.init_engine.restype = ctypes.c_int
+        
         self.lib.cleanup_engine.restype = None
+        
         self.lib.vector_search.argtypes = [np.ctypeslib.ndpointer(dtype=np.float32, ndim=1), ctypes.c_int]
         self.lib.vector_search.restype = ctypes.c_int
         
-        self.lib.train_index.argtypes = [ctypes.c_int]
+        self.lib.train_index.argtypes = [ctypes.c_int, ctypes.c_int]
         self.lib.train_index.restype = ctypes.c_int
-        self.lib.build_index.argtypes = [ctypes.c_int]
+        
+        self.lib.build_index.argtypes = [ctypes.c_int, ctypes.c_int]
         self.lib.build_index.restype = ctypes.c_int
 
-        self.lib.init_engine()
-
+        # Automatically fetch the vector dimensionality of whatever model is chosen
         self.encoder = SentenceTransformer(model_name)
+        self.dims = self.encoder.get_sentence_embedding_dimension()
+
+        # Pass the dynamic dimensions to the C memory allocator 
+        self.lib.init_engine(self.dims)
+
         self.map_path = map_path
         self.db = {}
         self.refresh_map()
@@ -52,17 +60,20 @@ class LocalVec:
         with open(self.map_path, "w") as f:
             json.dump(self.db, f)
 
-        if self.lib.train_index(k) != 0: return False
-        if self.lib.build_index(k) != 0: return False
+        # Pass both dynamic clusters and dynamic dimensions to the training kernels
+        if self.lib.train_index(k, self.dims) != 0: return False
+        if self.lib.build_index(k, self.dims) != 0: return False
         
         self.lib.cleanup_engine()
-        self.lib.init_engine()
+        self.lib.init_engine(self.dims)
         self.refresh_map()
         return True
 
     def search(self, query_text):
         query_vector = self.encoder.encode(query_text).astype(np.float32)
-        idx = self.lib.vector_search(query_vector, len(query_vector))
+        
+        # Pass the dimension variable cleanly to the vector search kernel
+        idx = self.lib.vector_search(query_vector, self.dims)
         
         if idx < 0:
             error_msgs = {

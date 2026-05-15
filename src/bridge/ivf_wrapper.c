@@ -1,8 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define DIMS 384
-
 typedef struct {
     int start_offset;
     int count;
@@ -14,27 +12,31 @@ int global_k = 0;
 int total_vectors_indexed = 0;
 
 extern int run_cluster_search(float* cluster_data, float* query, int count, int dims);
-extern int train_index_kernel(int k);
-extern int build_ivf_structure(int k);
+extern int train_index_kernel(int k, int dims);
+extern int build_ivf_structure(int k, int dims);
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-int init_engine() {
+int init_engine(int dims) {
     FILE* fc = fopen("ivf_centroids.bin", "rb");
     if (!fc) return -1;
     fseek(fc, 0, SEEK_END);
-    global_k = ftell(fc) / (DIMS * sizeof(float));
+    global_k = ftell(fc) / (dims * sizeof(float));
     rewind(fc);
 
-    global_centroids = (float*)malloc(global_k * DIMS * sizeof(float));
-    fread(global_centroids, sizeof(float), global_k * DIMS, fc);
+    global_centroids = (float*)malloc(global_k * dims * sizeof(float));
+    fread(global_centroids, sizeof(float), global_k * dims, fc);
     fclose(fc);
 
     global_offsets = (ClusterOffset*)malloc(global_k * sizeof(ClusterOffset));
     FILE* fo = fopen("ivf_offsets.bin", "rb");
-    if (!fo) return -2;
+    if (!fo) {
+        free(global_centroids);
+        global_centroids = NULL;
+        return -2;
+    }
     fread(global_offsets, sizeof(ClusterOffset), global_k, fo);
     fclose(fo);
 
@@ -50,12 +52,12 @@ void cleanup_engine() {
     if (global_offsets) { free(global_offsets); global_offsets = NULL; }
 }
 
-int train_index(int k) {
-    return train_index_kernel(k);
+int train_index(int k, int dims) {
+    return train_index_kernel(k, dims);
 }
 
-int build_index(int k) {
-    return build_ivf_structure(k);
+int build_index(int k, int dims) {
+    return build_ivf_structure(k, dims);
 }
 
 int vector_search(float* query, int dims) {
