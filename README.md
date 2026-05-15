@@ -152,9 +152,7 @@ print("\n")
 
 ---
 
-## Examples
-
-### PDF Chat Session
+## PDF Chat Session
 
 An interactive chat session over a PDF document. Maintains a short history window and enforces concise responses via a strict token limit.
 
