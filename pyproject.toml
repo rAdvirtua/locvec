@@ -1,0 +1,20 @@
+[project]
+name = "locvec"
+version = "0.1.0"
+description = "High-performance CUDA-accelerated vector retrieval core."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "Anurag Paul", email = "anurag2006.paul@gmail.com"}
+]
+keywords = ["cuda", "vector-retrieval", "ann", "rag"]
+dependencies = [
+    "numpy",
+    "sentence-transformers",
+    "torch"
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
