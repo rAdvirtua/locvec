@@ -152,6 +152,191 @@ print("\n")
 
 ---
 
+## Examples
+
+### PDF Chat Session
+
+An interactive chat session over a PDF document. Maintains a short history window and enforces concise responses via a strict token limit.
+
+```python
+import os
+import json
+import fitz
+import urllib.request
+from locvec import LocalVec
+
+class PDFChatSession:
+    def __init__(self, pdf_path, db_name="chat_store"):
+        self.pdf_path = pdf_path
+        self.lv = LocalVec(db_name=db_name)
+        self.history = []
+        self.llm_endpoint = "http://localhost:11434/api/generate"
+        self.model = "phi3"
+
+    def ingest_pdf(self, shard_size=600):
+        doc = fitz.open(self.pdf_path)
+        full_text = "".join([page.get_text().replace('\n', ' ') for page in doc])
+        shards = [full_text[i:i + shard_size] for i in range(0, len(full_text), shard_size)]
+        self.lv.build_full_index(shards)
+
+    def _call_llm_stream(self, prompt):
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": True,
+            "options": {"temperature": 0.2, "num_ctx": 4096, "num_predict": 150}
+        }
+        req = urllib.request.Request(
+            self.llm_endpoint,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
+        )
+        with urllib.request.urlopen(req) as response:
+            full_response = ""
+            for line in response:
+                if line:
+                    chunk = json.loads(line.decode('utf-8'))
+                    token = chunk.get('response', '')
+                    full_response += token
+                    print(token, end="", flush=True)
+                    if chunk.get('done'):
+                        break
+            return full_response
+
+    def start_chat(self):
+        while True:
+            query = input("\nUser: ").strip()
+            if query.lower() in ['exit', 'quit']:
+                break
+
+            _, context_shards = self.lv.search(query, top_k=2)
+            history_str = "\n".join([f"Q: {h['q']}\nA: {h['a']}" for h in self.history[-1:]])
+
+            full_prompt = (
+                f"SYSTEM: You are a concise technical assistant. "
+                f"Answer using ONLY the context provided. "
+                f"STRICT RULE: Your response MUST be 3-4 lines maximum.\n\n"
+                f"CONTEXT: {context_shards}\n\n"
+                f"HISTORY: {history_str}\n\n"
+                f"USER QUERY: {query}\n\n"
+                f"CONCISE ANSWER:"
+            )
+            print("\nAI: ", end="")
+            answer = self._call_llm_stream(full_prompt)
+            print()
+            self.history.append({"q": query, "a": answer})
+
+if __name__ == "__main__":
+    PDF_FILE = "research_paper.pdf"
+    session = PDFChatSession(PDF_FILE)
+    session.ingest_pdf()
+    session.start_chat()
+```
+
+---
+
+### IVF vs. Brute-Force Benchmark
+
+Compares LocVec's IVF-Voronoi search against a GPU flat (brute-force) baseline at scale. Useful for validating speedup on your specific hardware.
+
+```python
+import time
+import gc
+import fitz
+import random
+import numpy as np
+import torch
+import json
+import urllib.request
+from locvec import LocalVec
+
+SOURCE_PDF = "research_paper.pdf"
+QUERY = "Compare access latency and hardware characteristics of Constant vs Texture Memory in CUDA."
+TARGET_SHARDS = 200000
+OLLAMA_MODEL = "phi3"
+
+def prepare_corpus(file_path, total_shards):
+    doc = fitz.open(file_path)
+    base_text = [p.get_text().replace('\n', ' ') for p in doc]
+    multiplier = (total_shards // len(base_text)) + 1
+    corpus = []
+    for i in range(multiplier):
+        for shard in base_text:
+            if len(corpus) < total_shards:
+                corpus.append(f"{shard} [id_{i}]")
+    random.seed(42)
+    random.shuffle(corpus)
+    return corpus
+
+def stream_inference(query, context):
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": f"Context: {context}\n\nQuery: {query}\n\nTechnical Answer:",
+        "stream": True,
+        "options": {"temperature": 0.1, "num_predict": 350}
+    }
+    req = urllib.request.Request(
+        "http://localhost:11434/api/generate",
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'}
+    )
+    with urllib.request.urlopen(req) as response:
+        for line in response:
+            if line:
+                chunk = json.loads(line.decode('utf-8'))
+                yield chunk.get('response', '')
+                if chunk.get('done'):
+                    break
+
+if __name__ == "__main__":
+    corpus = prepare_corpus(SOURCE_PDF, TARGET_SHARDS)
+
+    lv = LocalVec(db_name="benchmark_final")
+    lv.build_full_index(corpus)
+
+    time.sleep(20)  # Thermal recovery for laptop hardware
+
+    embeddings_path = f"{lv.db_prefix}_offline_embeddings.bin"
+    raw_data = np.fromfile(embeddings_path, dtype=np.float32).reshape(-1, lv.dims)
+    all_vectors_gpu = torch.from_numpy(raw_data).to('cuda').half()
+    q_vec_gpu = torch.from_numpy(lv.encoder.encode(QUERY)).to('cuda').half()
+
+    # GPU Brute-Force
+    torch.cuda.synchronize()
+    _ = torch.norm(all_vectors_gpu[:100] - q_vec_gpu, dim=1)
+    t0 = time.perf_counter()
+    dist = torch.norm(all_vectors_gpu - q_vec_gpu, dim=1)
+    flat_idx = torch.argmin(dist).item()
+    torch.cuda.synchronize()
+    latency_flat = (time.perf_counter() - t0) * 1000
+    flat_context = corpus[flat_idx]
+
+    # LocVec IVF
+    t1 = time.perf_counter()
+    lv_idx, lv_context = lv.search(QUERY, top_k=4)
+    latency_lv = (time.perf_counter() - t1) * 1000
+
+    peak_vram = torch.cuda.max_memory_allocated() / (1024**2)
+    lv.offload_encoder()
+
+    del all_vectors_gpu
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    speedup = latency_flat / latency_lv
+    print(f"Brute-Force: {latency_flat:.2f}ms | LocVec IVF: {latency_lv:.2f}ms | Speedup: {speedup:.2f}x | Peak VRAM: {peak_vram:.2f}MB")
+
+    for token in stream_inference(QUERY, flat_context):
+        print(token, end="", flush=True)
+    print()
+
+    for token in stream_inference(QUERY, lv_context):
+        print(token, end="", flush=True)
+    print()
+```
+
+---
+
 ## User API Reference
 
 To use the vector engine in your own scripts, import the main class:
