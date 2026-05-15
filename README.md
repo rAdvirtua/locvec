@@ -102,32 +102,38 @@ You should see an interactive prompt. Type `/bye` to exit. Ollama runs as a back
 ## Usage
 
 ```python
-from locvec import LocalVec
+import fitz
 import time
+from locvec import LocalVec
 
-# Initialize engine
+def extract_and_chunk_pdf(file_path, chunk_size=1000):
+    text = ""
+    with fitz.open(file_path) as doc:
+        for page in doc:
+            text += page.get_text()
+    
+    return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+
 engine = LocalVec()
 
-# 1. Ingest and Index
-# LocVec shards the PDF and generates the IVF database locally
-print("Beginning document ingestion...")
-engine.ingest_pdf("research_paper.pdf")
+pdf_path = "research_paper.pdf"
+chunks = extract_and_chunk_pdf(pdf_path)
 
-# 2. Vector Search
-query = "What is the primary methodology described in this paper?"
+print(f"Extracted {len(chunks)} shards from {pdf_path}")
+engine.build_full_index(chunks)
+
+query = "Summarize the key findings of this document."
 start_time = time.perf_counter()
 
-context_index, context_text = engine.search(query)
+idx, context = engine.search(query)
 
 latency_ms = (time.perf_counter() - start_time) * 1000
 print(f"Search completed in {latency_ms:.2f}ms")
 
-# 3. VRAM Handoff and Inference
-# Flushes the embedding model to free GPU memory for the LLM
 engine.offload_encoder()
 
 print("\nAI Response:")
-for token in engine.query_llm_stream(model="phi3", prompt=query, context=context_text):
+for token in engine.query_llm_stream(model="phi3", prompt=query, context=context):
     print(token, end="", flush=True)
 print("\n")
 ```
