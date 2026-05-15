@@ -10,15 +10,12 @@ from sentence_transformers import SentenceTransformer
 
 class LocalVec:
     def __init__(self, db_name="default_db", model_name='all-MiniLM-L6-v2', storage_dir="."):
-        # 1. Dynamic Paths and Prefix Generation
         os.makedirs(storage_dir, exist_ok=True)
         self.db_prefix = os.path.join(storage_dir, db_name)
         self.map_path = f"{self.db_prefix}_map.json"
-        
-        # C needs byte strings, not Python strings
         self.c_prefix = self.db_prefix.encode('utf-8')
 
-        # 2. Library Load
+        # Library Load
         base_path = os.path.dirname(__file__)
         ext = ".dll" if sys.platform == "win32" else ".so"
         self.lib_path = os.path.join(base_path, f"liblocalvec{ext}")
@@ -27,24 +24,20 @@ class LocalVec:
             raise FileNotFoundError(f"LocVec Core not found at {self.lib_path}")
         self.lib = ctypes.CDLL(self.lib_path)
 
-        # 3. Dynamic Signatures (Now with c_char_p for string paths)
+        # Dynamic Signatures
         self.lib.init_engine.argtypes = [ctypes.c_int, ctypes.c_char_p]
         self.lib.init_engine.restype = ctypes.c_int
-        
         self.lib.cleanup_engine.restype = None
-        
         self.lib.vector_search.argtypes = [np.ctypeslib.ndpointer(dtype=np.float32, ndim=1), ctypes.c_int, ctypes.c_char_p]
         self.lib.vector_search.restype = ctypes.c_int
-        
         self.lib.train_index.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
         self.lib.train_index.restype = ctypes.c_int
-        
         self.lib.build_index.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_char_p]
         self.lib.build_index.restype = ctypes.c_int
 
-        # 4. Model Load & Engine Init
+        # Model Load (Using the updated method name to avoid FutureWarnings)
         self.encoder = SentenceTransformer(model_name)
-        self.dims = self.encoder.get_sentence_embedding_dimension()
+        self.dims = self.encoder.get_embedding_dimension()
 
         self.lib.init_engine(self.dims, self.c_prefix)
         self.db = {}
@@ -58,17 +51,13 @@ class LocalVec:
     def build_full_index(self, texts, max_iter=100):
         n = len(texts)
         k = max(1, int(np.sqrt(n)))
-
         embeddings = self.encoder.encode(texts, show_progress_bar=True).astype(np.float32)
-        
-        # Save embeddings with dynamic prefix
         embeddings.tofile(f"{self.db_prefix}_offline_embeddings.bin")
 
         self.db = {str(i): text for i, text in enumerate(texts)}
         with open(self.map_path, "w") as f:
             json.dump(self.db, f)
 
-        # Pass dynamic parameters through ctypes
         if self.lib.train_index(k, self.dims, self.c_prefix, max_iter) != 0: return False
         if self.lib.build_index(k, self.dims, self.c_prefix) != 0: return False
         
@@ -77,31 +66,41 @@ class LocalVec:
         self.refresh_map()
         return True
 
-    def search(self, query_text):
+    def search(self, query_text, top_k=3):
+        """
+        Retrieves the best match from CUDA and expands the window to top_k 
+        surrounding chunks to provide deep technical context.
+        """
         query_vector = self.encoder.encode(query_text).astype(np.float32)
-        idx = self.lib.vector_search(query_vector, self.dims, self.c_prefix)
+        center_idx = self.lib.vector_search(query_vector, self.dims, self.c_prefix)
         
-        if idx < 0:
-            error_msgs = {
-                -1: "Search Error: No valid cluster found.",
-                -2: f"IO Error: Database file {self.db_prefix}_ivf_database.bin missing.",
-                -3: "Bounds Error: Resulting index out of range.",
-                -404: "Engine Error: Core not initialized."
-            }
-            context = error_msgs.get(idx, "Unknown Core Error.")
-            return idx, context
+        if center_idx < 0:
+            return center_idx, "Search Core Error"
 
-        context = self.db.get(str(idx))
-        if context is None:
-            return idx, f"Mapping Error: Index {idx} not found in JSON database."
-            
-        return idx, context
+        # Expand the window: Grab the match and the chunks immediately following/preceding it
+        # This is vital for technical PDFs where one chunk might be a cut-off sentence.
+        context_chunks = []
+        for i in range(center_idx - 1, center_idx + top_k - 1):
+            chunk = self.db.get(str(i))
+            if chunk:
+                context_chunks.append(f"[Source Chunk {i}]: {chunk}")
+
+        merged_context = "\n\n".join(context_chunks)
+        return center_idx, merged_context
 
     def query_llm_stream(self, model, query, context, api_url="http://localhost:11434/api/generate", **kwargs):
-        prompt = f"Context: {context}\n\nQuery: {query}\n\nAnswer concisely:"
+        # Improved Prompt Engineering for Technical accuracy
+        prompt = (
+            f"### SYSTEM INSTRUCTIONS\n"
+            f"You are a specialized technical assistant. Use the provided context from the "
+            f"GPU Architecture Coursebook to answer the query accurately.\n"
+            f"If the context is insufficient, state that clearly. Do not hallucinate details.\n\n"
+            f"### CONTEXT\n{context}\n\n"
+            f"### USER QUERY\n{query}\n\n"
+            f"### TECHNICAL RESPONSE:"
+        )
         
-        # Merge default options with any user-supplied kwargs
-        options = {"temperature": 0.2}
+        options = {"temperature": 0.1, "num_predict": 512} # Lower temp = more facts, less fluff
         options.update(kwargs)
 
         payload = {
