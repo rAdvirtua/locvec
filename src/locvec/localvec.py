@@ -15,7 +15,6 @@ class LocalVec:
         self.map_path = f"{self.db_prefix}_map.json"
         self.c_prefix = self.db_prefix.encode('utf-8')
 
-        # Library Load
         base_path = os.path.dirname(__file__)
         ext = ".dll" if sys.platform == "win32" else ".so"
         self.lib_path = os.path.join(base_path, f"liblocalvec{ext}")
@@ -24,7 +23,6 @@ class LocalVec:
             raise FileNotFoundError(f"LocVec Core not found at {self.lib_path}")
         self.lib = ctypes.CDLL(self.lib_path)
 
-        # Dynamic Signatures
         self.lib.init_engine.argtypes = [ctypes.c_int, ctypes.c_char_p]
         self.lib.init_engine.restype = ctypes.c_int
         self.lib.cleanup_engine.restype = None
@@ -35,7 +33,6 @@ class LocalVec:
         self.lib.build_index.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_char_p]
         self.lib.build_index.restype = ctypes.c_int
 
-        # Model Load (Using the updated method name to avoid FutureWarnings)
         self.encoder = SentenceTransformer(model_name)
         self.dims = self.encoder.get_embedding_dimension()
 
@@ -77,8 +74,7 @@ class LocalVec:
         if center_idx < 0:
             return center_idx, "Search Core Error"
 
-        # Expand the window: Grab the match and the chunks immediately following/preceding it
-        # This is vital for technical PDFs where one chunk might be a cut-off sentence.
+        
         context_chunks = []
         for i in range(center_idx - 1, center_idx + top_k - 1):
             chunk = self.db.get(str(i))
@@ -100,7 +96,7 @@ class LocalVec:
             f"### TECHNICAL RESPONSE:"
         )
         
-        options = {"temperature": 0.1, "num_predict": 512} # Lower temp = more facts, less fluff
+        options = {"temperature": 0.1, "num_predict": 512}
         options.update(kwargs)
 
         payload = {
