@@ -88,8 +88,8 @@ class LocalVec:
         # Improved Prompt Engineering for Technical accuracy
         prompt = (
             f"### SYSTEM INSTRUCTIONS\n"
-            f"You are a specialized technical assistant. Use the provided context from the "
-            f"GPU Architecture Coursebook to answer the query accurately.\n"
+            f"You are a specialized technical assistant. Use the provided context"
+            f"to answer the query accurately.\n"
             f"If the context is insufficient, state that clearly. Do not hallucinate details.\n\n"
             f"### CONTEXT\n{context}\n\n"
             f"### USER QUERY\n{query}\n\n"
